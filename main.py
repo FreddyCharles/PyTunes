@@ -29,53 +29,83 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 # --- Constants ---
-BG_COLOR = "#EAEAEA"
-SCREEN_BG = "white"
-TEXT_COLOR = "black"
-SELECT_BG = "#B0B0D0"
-BUTTON_BG = BG_COLOR
-ACTIVE_BUTTON_BG = "#C0C0C0"
-PROGRESS_TROUGH = "#D0D0D0"
-PROGRESS_BAR = "#5050FF"
-
-FONT_MAIN = ("Helvetica", 10)
-FONT_SCREEN = ("Helvetica", 10)
-FONT_METADATA = ("Helvetica", 9)
-FONT_TIME = ("Helvetica", 8)
-FONT_LISTBOX = ("Helvetica", 9)
-FONT_BUTTON_FALLBACK = ("Helvetica", 8) # Smaller font for text buttons
-
-SUPPORTED_FORMATS = ('.mp3', '.ogg', '.wav', '.flac')
-ICON_PATH = "icons" # Relative path to icons folder
-ALBUM_ART_SIZE = (100, 100)
-
-REPEAT_OFF = 0
-REPEAT_ONE = 1
-REPEAT_ALL = 2
+# These will be moved into the MediaPlayerApp class
 
 class MediaPlayerApp:
+    # --- Class Attributes (Moved Constants) ---
+    BG_COLOR = "#EAEAEA"
+    SCREEN_BG = "white"
+    TEXT_COLOR = "black"
+    SELECT_BG = "#B0B0D0"
+    # BUTTON_BG = BG_COLOR # Will be self.BG_COLOR
+    ACTIVE_BUTTON_BG = "#C0C0C0"
+    PROGRESS_TROUGH = "#D0D0D0"
+    PROGRESS_BAR = "#5050FF"
+
+    FONT_MAIN = ("Helvetica", 10)
+    FONT_SCREEN = ("Helvetica", 10)
+    FONT_METADATA = ("Helvetica", 9)
+    FONT_TIME = ("Helvetica", 8)
+    FONT_LISTBOX = ("Helvetica", 9)
+    FONT_BUTTON_FALLBACK = ("Helvetica", 8) # Smaller font for text buttons
+
+    SUPPORTED_FORMATS = ('.mp3', '.ogg', '.wav', '.flac')
+    ICON_PATH = "icons" # Relative path to icons folder
+    ALBUM_ART_SIZE = (100, 100)
+
+    REPEAT_OFF = 0
+    REPEAT_ONE = 1
+    REPEAT_ALL = 2
+    # --- End Class Attributes ---
+
     def __init__(self, root):
+        """
+        Initializes the MediaPlayerApp.
+
+        Args:
+            root: The root Tkinter window.
+        """
         self.root = root
         self.root.title("PyPod Plus")
         self.root.geometry("350x600")
-        self.root.configure(bg=BG_COLOR)
+        self.root.configure(bg=self.BG_COLOR)
         self.root.resizable(False, False)
 
-        # --- State ---
-        self.playlist = [] # Current view (filtered/shuffled) list of paths
-        self.original_playlist_order = [] # Master list of paths in original/sorted order
-        self.current_track_index = -1 # Index relative to the *visible* self.playlist in listbox
-        self.playback_history = [] # List of previous listbox indices for shuffle-back
-        self.playing_state = "stopped" # stopped, playing, paused
-        self.current_track_duration = 0
-        self.update_seek_job = None # Tkinter .after job ID for time update
-        self.browser_window = None # Reference to the file browser Toplevel
-        self.is_shuffled = False
-        self.repeat_mode = REPEAT_OFF
-        self.current_search_term = ""
-        self.listbox_path_map = {} # Maps visible listbox index to actual file path
+        # --- Initialize more class constants that depend on others
+        self.BUTTON_BG = self.BG_COLOR # Dependent constant for button backgrounds
 
-        # State tracking for optimization
+        # --- Application State Variables ---
+        # self.playlist: Holds the file paths of tracks currently displayed in the listbox.
+        # This list can be filtered, sorted differently from original_playlist_order, or shuffled.
+        self.playlist = []
+
+        # self.original_playlist_order: Master list of all unique track file paths added by the user.
+        # This list maintains the order after explicit sorting and is the source for filtering/shuffling.
+        self.original_playlist_order = []
+
+        # self.current_track_index: The index of the currently playing or selected track
+        # *relative to the visible self.playlist* in the listbox. -1 if no track is selected/playing.
+        self.current_track_index = -1
+
+        # self.playback_history: Stores previous self.current_track_index values,
+        # primarily used for the 'previous' button functionality when shuffle is active.
+        self.playback_history = []
+
+        self.playing_state = "stopped"  # Can be "stopped", "playing", or "paused"
+        self.current_track_duration = 0 # Duration of the current track in seconds
+        self.update_seek_job = None     # Stores the .after() job ID for UI updates of the seek bar
+        self.browser_window = None      # Reference to the Toplevel file browser window, if open
+        self.is_shuffled = False        # Boolean flag for shuffle mode
+        self.repeat_mode = self.REPEAT_OFF # Current repeat mode (REPEAT_OFF, REPEAT_ONE, REPEAT_ALL)
+        self.current_search_term = ""   # Stores the current search query string
+
+        # self.listbox_path_map: Critical mapping where keys are integer indices of items
+        # in the *visible* playlist_box, and values are the actual file paths. This is essential
+        # because listbox indices change with filtering/shuffling, but we need the real path.
+        self.listbox_path_map = {}
+
+        # State tracking for optimization: these store the last applied filter/shuffle states
+        # to avoid unnecessary UI refreshes if the underlying data or settings haven't changed.
         self._last_applied_search = ""
         self._last_applied_shuffle = self.is_shuffled
 
@@ -102,6 +132,7 @@ class MediaPlayerApp:
         self.create_menu()
         self.create_styles() # Separate style creation
         self.create_ui()
+        self._create_ui_helpers() # Call the new helper methods
 
         # --- Bind Events ---
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -109,7 +140,13 @@ class MediaPlayerApp:
         self.check_music_end()
 
     def load_icons(self):
-        """Loads icons from the ICON_PATH folder and sets up fallbacks."""
+        """
+        Loads icons from the self.ICON_PATH folder.
+        Icons are defined in `icon_definitions` with their filenames and text fallbacks.
+        If an icon file is not found or fails to load, a text fallback is used for buttons.
+        A default placeholder album art is also loaded or created.
+        """
+        # Defines icon names, their corresponding filenames, and text for fallback.
         icon_definitions = {
             "play": ("play.png", "Play"), "pause": ("pause.png", "Pause"),
             "next": ("next.png", ">>"), "previous": ("previous.png", "<<"),
@@ -122,17 +159,17 @@ class MediaPlayerApp:
             "search": ("search.png", "Search"), "clear_search": ("clear_search.png", "Clear"),
         }
         missing_icons = []
-        print(f"Looking for icons in: {os.path.abspath(ICON_PATH)}")
+        print(f"Looking for icons in: {os.path.abspath(self.ICON_PATH)}")
 
         for name, (filename, fallback_text) in icon_definitions.items():
             self.icon_fallbacks[name] = fallback_text
             try:
-                 fpath = resource_path(os.path.join(ICON_PATH, filename))
+                 fpath = resource_path(os.path.join(self.ICON_PATH, filename))
                  if not os.path.exists(fpath): raise FileNotFoundError(f"Icon not found: {fpath}")
 
                  if name == 'placeholder':
                       # Resize placeholder immediately
-                      pil_img = Image.open(fpath).resize(ALBUM_ART_SIZE, Image.Resampling.LANCZOS)
+                      pil_img = Image.open(fpath).resize(self.ALBUM_ART_SIZE, Image.Resampling.LANCZOS)
                       self.default_album_art = ImageTk.PhotoImage(pil_img)
                       self.icons[name] = self.default_album_art # Store the PhotoImage
                  else:
@@ -142,12 +179,10 @@ class MediaPlayerApp:
             except FileNotFoundError:
                  missing_icons.append(filename)
                  if name == 'placeholder' and not self.default_album_art: # Create dummy if missing and not already created
-                      try:
-                           pil_img = Image.new('RGBA', ALBUM_ART_SIZE, (200, 200, 200, 255)) # Gray placeholder
-                           self.default_album_art = ImageTk.PhotoImage(pil_img)
-                           self.icons[name] = self.default_album_art
-                      except Exception as img_e:
-                            print(f"Error creating dummy placeholder image: {img_e}")
+                      dummy_art = self._create_dummy_placeholder_art()
+                      if dummy_art:
+                           self.default_album_art = dummy_art
+                           self.icons[name] = dummy_art
             except Exception as e:
                  print(f"Error loading icon '{filename}': {e}. Using text fallback.")
                  # Ensure traceback is printed for unexpected errors during loading
@@ -155,20 +190,37 @@ class MediaPlayerApp:
                      traceback.print_exc()
                  missing_icons.append(f"{filename} (Error)")
                  if name == 'placeholder' and not self.default_album_art: # Create dummy on other errors too
-                      try:
-                           pil_img = Image.new('RGBA', ALBUM_ART_SIZE, (200, 200, 200, 255))
-                           self.default_album_art = ImageTk.PhotoImage(pil_img)
-                           self.icons[name] = self.default_album_art
-                      except Exception as img_e:
-                           print(f"Error creating dummy placeholder image after error: {img_e}")
+                      dummy_art = self._create_dummy_placeholder_art()
+                      if dummy_art:
+                           self.default_album_art = dummy_art
+                           self.icons[name] = dummy_art
 
         if missing_icons:
              print(f"Note: Could not load icons: {', '.join(missing_icons)}. Using text fallbacks where applicable.")
         # Final check for default album art
         if not self.default_album_art:
             print("Warning: Default album art could not be loaded or created. Album art display may fail.")
-            # Create a minimal Tkinter image as last resort? (Difficult without Pillow)
+            # Attempt to create a final dummy if all else failed
+            dummy_art = self._create_dummy_placeholder_art()
+            if dummy_art:
+                self.default_album_art = dummy_art
+                # self.icons['placeholder'] = dummy_art # Should already be handled or not needed if loop finished
 
+
+    def _create_dummy_placeholder_art(self):
+        """
+        Creates a fallback gray placeholder PhotoImage using PIL.
+        This is used if the 'placeholder.png' icon is missing or if other icon loading errors occur
+        and a default album art is needed.
+        Returns:
+            ImageTk.PhotoImage: The generated placeholder image, or None if creation fails.
+        """
+        try:
+            pil_img = Image.new('RGBA', self.ALBUM_ART_SIZE, (200, 200, 200, 255)) # Simple gray placeholder
+            return ImageTk.PhotoImage(pil_img)
+        except Exception as img_e:
+            print(f"Error creating dummy placeholder image: {img_e}")
+            return None
 
     def configure_button_icon(self, button, icon_name):
         """Sets button image if icon exists, otherwise sets text fallback.
@@ -188,7 +240,7 @@ class MediaPlayerApp:
                 button.configure(text=fallback, style="Fallback.TButton", width=0) # width=0 allows text to size
             else:
                 # For tk.Button, configure directly
-                button.config(text=fallback, font=FONT_BUTTON_FALLBACK, width=0, height=0, padx=5, pady=2)
+                button.config(text=fallback, font=self.FONT_BUTTON_FALLBACK, width=0, height=0, padx=5, pady=2)
 
 
     def create_menu(self):
@@ -213,9 +265,9 @@ class MediaPlayerApp:
         # Repeat Submenu
         self.repeat_menu_var = tk.IntVar(value=self.repeat_mode)
         repeat_menu = Menu(playback_menu, tearoff=0)
-        repeat_menu.add_radiobutton(label="Repeat Off", variable=self.repeat_menu_var, value=REPEAT_OFF, command=self.set_repeat_mode)
-        repeat_menu.add_radiobutton(label="Repeat One", variable=self.repeat_menu_var, value=REPEAT_ONE, command=self.set_repeat_mode)
-        repeat_menu.add_radiobutton(label="Repeat All", variable=self.repeat_menu_var, value=REPEAT_ALL, command=self.set_repeat_mode)
+        repeat_menu.add_radiobutton(label="Repeat Off", variable=self.repeat_menu_var, value=self.REPEAT_OFF, command=self.set_repeat_mode)
+        repeat_menu.add_radiobutton(label="Repeat One", variable=self.repeat_menu_var, value=self.REPEAT_ONE, command=self.set_repeat_mode)
+        repeat_menu.add_radiobutton(label="Repeat All", variable=self.repeat_menu_var, value=self.REPEAT_ALL, command=self.set_repeat_mode)
         playback_menu.add_cascade(label="Repeat", menu=repeat_menu)
 
         # Playlist Menu
@@ -240,24 +292,24 @@ class MediaPlayerApp:
 
             # --- Define Styles ---
             # Base style for normal TTK Buttons (used by search/clear/browser)
-            style.configure("TButton", padding=5, background=BUTTON_BG, relief=tk.FLAT, font=FONT_MAIN)
-            style.map("TButton", background=[('active', ACTIVE_BUTTON_BG)])
+            style.configure("TButton", padding=5, background=self.BUTTON_BG, relief=tk.FLAT, font=self.FONT_MAIN)
+            style.map("TButton", background=[('active', self.ACTIVE_BUTTON_BG)])
 
             # Style specifically for TTK Buttons when using text fallback
-            style.configure("Fallback.TButton", font=FONT_BUTTON_FALLBACK, padding=(5, 2)) # Use tuple for padding (LR, TB)
+            style.configure("Fallback.TButton", font=self.FONT_BUTTON_FALLBACK, padding=(5, 2)) # Use tuple for padding (LR, TB)
             # Inherit other properties from TButton or define explicitly
-            style.map("Fallback.TButton", background=[('active', ACTIVE_BUTTON_BG)])
+            style.map("Fallback.TButton", background=[('active', self.ACTIVE_BUTTON_BG)])
 
             # Progress bar style
-            style.configure("custom.Horizontal.TProgressbar", troughcolor=PROGRESS_TROUGH, background=PROGRESS_BAR, thickness=8, borderwidth=0)
+            style.configure("custom.Horizontal.TProgressbar", troughcolor=self.PROGRESS_TROUGH, background=self.PROGRESS_BAR, thickness=8, borderwidth=0)
             # Scale (Volume) style
-            style.configure("custom.Horizontal.TScale", background=BG_COLOR, troughcolor=SCREEN_BG, sliderlength=15)
+            style.configure("custom.Horizontal.TScale", background=self.BG_COLOR, troughcolor=self.SCREEN_BG, sliderlength=15)
             # Treeview style
-            style.configure("custom.Treeview", background=SCREEN_BG, fieldbackground=SCREEN_BG, foreground=TEXT_COLOR, rowheight=22, font=FONT_MAIN)
-            style.map('custom.Treeview', background=[('selected', SELECT_BG)], foreground=[('selected', TEXT_COLOR)])
+            style.configure("custom.Treeview", background=self.SCREEN_BG, fieldbackground=self.SCREEN_BG, foreground=self.TEXT_COLOR, rowheight=22, font=self.FONT_MAIN)
+            style.map('custom.Treeview', background=[('selected', self.SELECT_BG)], foreground=[('selected', self.TEXT_COLOR)])
             # Scrollbar style
-            style.configure("TScrollbar", arrowcolor=TEXT_COLOR, borderwidth=0, troughcolor=BG_COLOR, background=BUTTON_BG)
-            style.map("TScrollbar", background=[('active', ACTIVE_BUTTON_BG)])
+            style.configure("TScrollbar", arrowcolor=self.TEXT_COLOR, borderwidth=0, troughcolor=self.BG_COLOR, background=self.BUTTON_BG)
+            style.map("TScrollbar", background=[('active', self.ACTIVE_BUTTON_BG)])
 
         except tk.TclError as e:
             print(f"ttk themes/styles not fully available. Using default. Error: {e}")
@@ -267,53 +319,80 @@ class MediaPlayerApp:
 
 
     def create_ui(self):
-        """Creates the main user interface elements."""
-        main_frame = tk.Frame(self.root, bg=BG_COLOR)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        """
+        Creates the main parent frame for all UI elements.
+        This frame is stored as `self.main_frame` and serves as the container for
+        different sections of the player UI.
+        """
+        self.main_frame = tk.Frame(self.root, bg=self.BG_COLOR) # Main container for all UI
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # --- Screen Area (Top Section) ---
-        screen_area = tk.Frame(main_frame, bg=BG_COLOR)
+    def _create_ui_helpers(self):
+        """
+        Orchestrates the creation of different UI sections by calling dedicated helper methods.
+        This keeps the UI building process modular and organized.
+        """
+        self._create_screen_area(self.main_frame)
+        self._create_search_bar(self.main_frame)
+        self._create_playlist_area(self.main_frame)
+        self._create_control_area(self.main_frame)
+
+    def _create_screen_area(self, parent_frame):
+        """
+        Creates the top 'screen' area of the player.
+        This includes album art, track title, artist, album labels,
+        and the progress bar with time displays.
+        Args:
+            parent_frame: The tk.Frame to build this UI section into.
+        """
+        screen_area = tk.Frame(parent_frame, bg=self.BG_COLOR)
         screen_area.pack(fill=tk.X, pady=(0, 10))
         screen_area.columnconfigure(1, weight=1)
 
         # Album Art
         art_image = self.default_album_art # Use the pre-loaded/created one
-        self.album_art_label = tk.Label(screen_area, bg=SCREEN_BG, image=art_image,
-                                        width=ALBUM_ART_SIZE[0], height=ALBUM_ART_SIZE[1])
+        self.album_art_label = tk.Label(screen_area, bg=self.SCREEN_BG, image=art_image,
+                                        width=self.ALBUM_ART_SIZE[0], height=self.ALBUM_ART_SIZE[1])
         if not art_image: # Fallback text if image creation totally failed
              self.album_art_label.config(text="Art", width=12, height=6)
         self.album_art_label.image = art_image # Keep reference even if None
         self.album_art_label.grid(row=0, column=0, rowspan=4, sticky='nsew', padx=(0, 10), pady=5) # Use nsew sticky
 
         # Track Info Labels
-        self.track_title_label = tk.Label(screen_area, text="---", anchor='w', bg=SCREEN_BG, fg=TEXT_COLOR, font=FONT_SCREEN)
+        self.track_title_label = tk.Label(screen_area, text="---", anchor='w', bg=self.SCREEN_BG, fg=self.TEXT_COLOR, font=self.FONT_SCREEN)
         self.track_title_label.grid(row=0, column=1, sticky='ew', padx=5)
-        self.track_artist_label = tk.Label(screen_area, text="---", anchor='w', bg=SCREEN_BG, fg=TEXT_COLOR, font=FONT_METADATA)
+        self.track_artist_label = tk.Label(screen_area, text="---", anchor='w', bg=self.SCREEN_BG, fg=self.TEXT_COLOR, font=self.FONT_METADATA)
         self.track_artist_label.grid(row=1, column=1, sticky='ew', padx=5)
-        self.track_album_label = tk.Label(screen_area, text="---", anchor='w', bg=SCREEN_BG, fg=TEXT_COLOR, font=FONT_METADATA)
+        self.track_album_label = tk.Label(screen_area, text="---", anchor='w', bg=self.SCREEN_BG, fg=self.TEXT_COLOR, font=self.FONT_METADATA)
         self.track_album_label.grid(row=2, column=1, sticky='ew', padx=5)
 
         # Progress Bar & Time Frame
-        progress_time_frame = tk.Frame(screen_area, bg=SCREEN_BG)
+        progress_time_frame = tk.Frame(screen_area, bg=self.SCREEN_BG)
         progress_time_frame.grid(row=3, column=1, sticky='sew', padx=5, pady=(2, 0)) # Use sticky 's' to push down
         progress_time_frame.columnconfigure(1, weight=1)
-        self.current_time_label = tk.Label(progress_time_frame, text="00:00", anchor='w', bg=SCREEN_BG, fg=TEXT_COLOR, font=FONT_TIME)
+        self.current_time_label = tk.Label(progress_time_frame, text="00:00", anchor='w', bg=self.SCREEN_BG, fg=self.TEXT_COLOR, font=self.FONT_TIME)
         self.current_time_label.grid(row=0, column=0, sticky='w')
         self.progress_bar = ttk.Progressbar(progress_time_frame, orient=tk.HORIZONTAL, length=100, mode='determinate', style="custom.Horizontal.TProgressbar")
         self.progress_bar.grid(row=0, column=1, sticky='ew', padx=5)
-        self.total_time_label = tk.Label(progress_time_frame, text="/ 00:00", anchor='e', bg=SCREEN_BG, fg=TEXT_COLOR, font=FONT_TIME)
+        self.total_time_label = tk.Label(progress_time_frame, text="/ 00:00", anchor='e', bg=self.SCREEN_BG, fg=self.TEXT_COLOR, font=self.FONT_TIME)
         self.total_time_label.grid(row=0, column=2, sticky='e')
 
         # Border around screen area
-        border_frame = tk.Frame(screen_area, bg=SCREEN_BG, bd=1, relief=tk.SOLID)
+        border_frame = tk.Frame(screen_area, bg=self.SCREEN_BG, bd=1, relief=tk.SOLID)
         border_frame.place(x=0, y=0, relwidth=1, relheight=1) # Use x, y=0
         border_frame.lower() # Place behind content
 
-        # --- Search Bar ---
-        search_frame = tk.Frame(main_frame, bg=BG_COLOR)
+    def _create_search_bar(self, parent_frame):
+        """
+        Creates the search bar section below the screen area.
+        This includes the search entry field and search/clear buttons.
+        Args:
+            parent_frame: The tk.Frame to build this UI section into.
+        """
+        search_frame = tk.Frame(parent_frame, bg=self.BG_COLOR)
         search_frame.pack(fill=tk.X, pady=(5, 5))
         self.search_var = tk.StringVar()
-        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30, font=FONT_MAIN)
+        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30, font=self.FONT_MAIN)
         self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         self.search_entry.bind("<Return>", self.search_playlist_action)
 
@@ -327,13 +406,19 @@ class MediaPlayerApp:
         self.configure_button_icon(self.clear_search_button, 'clear_search')
         self.clear_search_button.pack(side=tk.LEFT)
 
-        # --- Playlist Area ---
-        list_frame = tk.Frame(main_frame)
+    def _create_playlist_area(self, parent_frame):
+        """
+        Creates the playlist display area.
+        This includes the Listbox widget for showing tracks and its associated Scrollbar.
+        Args:
+            parent_frame: The tk.Frame to build this UI section into.
+        """
+        list_frame = tk.Frame(parent_frame) # Frame to hold listbox and scrollbar
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL)
         self.playlist_box = tk.Listbox(
-            list_frame, bg=SCREEN_BG, fg=TEXT_COLOR, selectbackground=SELECT_BG,
-            selectforeground=TEXT_COLOR, font=FONT_LISTBOX, activestyle='none',
+            list_frame, bg=self.SCREEN_BG, fg=self.TEXT_COLOR, selectbackground=self.SELECT_BG,
+            selectforeground=self.TEXT_COLOR, font=self.FONT_LISTBOX, activestyle='none',
             highlightthickness=0, bd=0, relief=tk.FLAT, yscrollcommand=scrollbar.set
         )
         scrollbar.config(command=self.playlist_box.yview)
@@ -342,18 +427,24 @@ class MediaPlayerApp:
         self.playlist_box.bind("<Double-Button-1>", self.play_selected)
         list_frame.config(bd=1, relief=tk.SOLID)
 
-        # --- Control Area ---
-        control_frame = tk.Frame(main_frame, bg=BG_COLOR)
+    def _create_control_area(self, parent_frame):
+        """
+        Creates the bottom control area of the player.
+        This includes the volume scale and playback control buttons (shuffle, prev, play/pause, next, repeat).
+        Args:
+            parent_frame: The tk.Frame to build this UI section into.
+        """
+        control_frame = tk.Frame(parent_frame, bg=self.BG_COLOR)
         control_frame.pack(fill=tk.X)
         self.volume_scale = ttk.Scale(control_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.set_volume, style="custom.Horizontal.TScale")
         self.volume_scale.set(70); pygame.mixer.music.set_volume(0.7) # Set initial volume
         self.volume_scale.pack(fill=tk.X, pady=(0, 5))
 
-        button_frame = tk.Frame(control_frame, bg=BG_COLOR)
+        button_frame = tk.Frame(control_frame, bg=self.BG_COLOR)
         button_frame.pack()
 
         # Define options for standard tk Buttons
-        tk_button_opts = {'bg': BUTTON_BG, 'activebackground': ACTIVE_BUTTON_BG,
+        tk_button_opts = {'bg': self.BUTTON_BG, 'activebackground': self.ACTIVE_BUTTON_BG,
                           'relief': tk.FLAT, 'bd': 0, 'width': 35, 'height': 35}
         padx = 5
 
@@ -379,7 +470,6 @@ class MediaPlayerApp:
         self.update_repeat_button() # Sets icon/text based on state
         self.repeat_button.pack(side=tk.LEFT, padx=padx)
 
-
     # --- UI Update Helpers ---
     def update_play_pause_button(self):
         """Updates the Play/Pause button icon/text based on the playing state."""
@@ -393,8 +483,8 @@ class MediaPlayerApp:
 
     def update_repeat_button(self):
         """Updates the Repeat button icon/text based on the repeat state."""
-        if self.repeat_mode == REPEAT_ONE: icon_name = 'repeat_one'
-        elif self.repeat_mode == REPEAT_ALL: icon_name = 'repeat_all'
+        if self.repeat_mode == self.REPEAT_ONE: icon_name = 'repeat_one'
+        elif self.repeat_mode == self.REPEAT_ALL: icon_name = 'repeat_all'
         else: icon_name = 'repeat_off'
         self.configure_button_icon(self.repeat_button, icon_name)
 
@@ -412,31 +502,37 @@ class MediaPlayerApp:
 
 
     # --- File Browser Methods ---
-    # (Previously provided browser code goes here - unchanged from last version)
-    # --- Start Browser Methods ---
-    def open_file_browser(self):
-        if self.browser_window and self.browser_window.winfo_exists():
-             self.browser_window.lift()
-             return
 
-        self.browser_window = tk.Toplevel(self.root)
-        self.browser_window.title("Browse Music")
-        self.browser_window.geometry("400x450")
-        self.browser_window.configure(bg=BG_COLOR)
-        self.browser_window.transient(self.root)
-        self.browser_window.grab_set()
-
-        path_frame = tk.Frame(self.browser_window, bg=BG_COLOR)
+    def _create_browser_path_frame(self, parent_window):
+        """
+        Creates the UI frame for path navigation in the file browser.
+        Includes an 'Up' button and a non-editable Entry to display the current path.
+        Args:
+            parent_window: The Toplevel window of the file browser.
+        Returns:
+            tk.Frame: The created path frame.
+        """
+        path_frame = tk.Frame(parent_window, bg=self.BG_COLOR)
         path_frame.pack(fill=tk.X, padx=5, pady=5)
 
         up_button = ttk.Button(path_frame, text="Up", width=5, command=self.browser_navigate_up, style="TButton")
         up_button.pack(side=tk.LEFT, padx=(0, 5))
 
-        self.current_path_var = tk.StringVar()
-        path_entry = ttk.Entry(path_frame, textvariable=self.current_path_var, state='readonly', font=FONT_MAIN)
+        self.current_path_var = tk.StringVar() # Used by populate_browser
+        path_entry = ttk.Entry(path_frame, textvariable=self.current_path_var, state='readonly', font=self.FONT_MAIN)
         path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        return path_frame
 
-        tree_frame = tk.Frame(self.browser_window)
+    def _create_browser_tree_view(self, parent_window):
+        """
+        Creates the UI frame for the Treeview in the file browser.
+        The Treeview lists files and folders, with a scrollbar.
+        Args:
+            parent_window: The Toplevel window of the file browser.
+        Returns:
+            tk.Frame: The created tree view frame.
+        """
+        tree_frame = tk.Frame(parent_window)
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0,5))
 
         tree_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
@@ -449,15 +545,18 @@ class MediaPlayerApp:
         tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.browser_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.browser_tree.bind("<Double-1>", self.browser_item_activated)
+        return tree_frame
 
-        # Prepare icons for treeview (check if loaded)
-        self.tree_icons = {}
-        if 'folder' in self.icons and isinstance(self.icons['folder'], PhotoImage):
-             self.tree_icons['folder'] = self.icons['folder']
-        if 'file' in self.icons and isinstance(self.icons['file'], PhotoImage):
-             self.tree_icons['file'] = self.icons['file']
-
-        action_frame = tk.Frame(self.browser_window, bg=BG_COLOR)
+    def _create_browser_action_buttons(self, parent_window):
+        """
+        Creates the UI frame for action buttons at the bottom of the file browser.
+        Includes buttons like "Add Selected", "Add All in Folder", "Clear Playlist", and "Close".
+        Args:
+            parent_window: The Toplevel window of the file browser.
+        Returns:
+            tk.Frame: The created action buttons frame.
+        """
+        action_frame = tk.Frame(parent_window, bg=self.BG_COLOR)
         action_frame.pack(fill=tk.X, padx=5, pady=5)
 
         add_file_button = ttk.Button(action_frame, text="Add Selected", command=self.browser_add_selected, style="TButton")
@@ -471,7 +570,38 @@ class MediaPlayerApp:
 
         close_button = ttk.Button(action_frame, text="Close", command=self.browser_window.destroy, style="TButton")
         close_button.pack(side=tk.RIGHT, padx=2)
+        return action_frame
 
+    # --- Start Browser Methods ---
+    def open_file_browser(self):
+        """
+        Opens a Toplevel window for browsing music files and folders.
+        If the browser window already exists, it lifts it to the front.
+        The UI components (path bar, tree view, action buttons) are created by helper methods.
+        """
+        if self.browser_window and self.browser_window.winfo_exists():
+             self.browser_window.lift() # Bring to front if already open
+             return
+
+        self.browser_window = tk.Toplevel(self.root)
+        self.browser_window.title("Browse Music")
+        self.browser_window.geometry("400x450")
+        self.browser_window.configure(bg=self.BG_COLOR)
+        self.browser_window.transient(self.root)
+        self.browser_window.grab_set()
+
+        # Call helper methods to create UI components
+        self._create_browser_path_frame(self.browser_window)
+        self._create_browser_tree_view(self.browser_window)
+        self._create_browser_action_buttons(self.browser_window)
+
+        # Prepare icons for treeview (check if loaded)
+        self.tree_icons = {} # This should be initialized here or in __init__ if browser is always available
+        if 'folder' in self.icons and isinstance(self.icons['folder'], PhotoImage):
+             self.tree_icons['folder'] = self.icons['folder']
+        if 'file' in self.icons and isinstance(self.icons['file'], PhotoImage):
+             self.tree_icons['file'] = self.icons['file']
+        
         # Set initial path more robustly
         try:
             start_path = os.path.expanduser("~")
@@ -532,7 +662,7 @@ class MediaPlayerApp:
              try:
                  if os.path.isdir(full_item_path):
                      folders.append((item, full_item_path))
-                 elif item.lower().endswith(SUPPORTED_FORMATS) and os.path.isfile(full_item_path):
+                 elif item.lower().endswith(self.SUPPORTED_FORMATS) and os.path.isfile(full_item_path):
                      files.append((item, full_item_path))
              except OSError as e: # Permission error on specific item
                  print(f"Skipping item due to access error: {full_item_path} ({e})")
@@ -647,7 +777,7 @@ class MediaPlayerApp:
         files_to_add = []
         try:
             for item in os.listdir(current_path):
-                if item.lower().endswith(SUPPORTED_FORMATS):
+                if item.lower().endswith(self.SUPPORTED_FORMATS):
                     filepath = os.path.join(current_path, item)
                     # Check if it's actually a file and exists
                     if os.path.isfile(filepath):
@@ -866,17 +996,30 @@ class MediaPlayerApp:
 
     # --- Metadata fetching ---
     def get_track_metadata(self, filepath):
-        """Reads metadata using mutagen. Handles file not found."""
-        # Check file existence first
+        """
+        Reads metadata (title, artist, album, duration, album art) from a given audio file
+        using the Mutagen library. Handles various audio formats (MP3, Ogg, FLAC, WAV).
+
+        Args:
+            filepath (str): The absolute path to the audio file.
+
+        Returns:
+            dict: A dictionary containing metadata. Defaults are provided if tags are missing
+                  or if the file cannot be read. Includes 'art_data' which can be None.
+        """
+        # Check file existence first to avoid Mutagen errors on non-existent files
         if not os.path.isfile(filepath): # Use isfile for robustness
              print(f"Metadata fetch skipped: File not found or not a file: {filepath}")
+             # Return a default structure indicating the file is missing
              return {'title': f"[Missing] {os.path.basename(filepath)}", 'artist': "", 'album': "", 'duration': 0, 'art_data': None}
 
+        # Default metadata structure
         metadata = {'title': os.path.basename(filepath), 'artist': 'Unknown Artist', 'album': 'Unknown Album', 'duration': 0, 'art_data': None}
         try:
-            # --- Metadata reading logic (same as before) ---
-            ext = os.path.splitext(filepath)[1].lower()
-            audio = None; art_data = None
+            ext = os.path.splitext(filepath)[1].lower() # Get file extension
+            audio = None; art_data = None # Initialize
+
+            # --- Format-specific metadata extraction ---
             if ext == '.mp3':
                 try: audio = MP3(filepath, ID3=ID3)
                 except ID3NoHeaderError: audio = MP3(filepath)
@@ -928,33 +1071,63 @@ class MediaPlayerApp:
         return metadata
 
     # --- Playback ---
-    def play_track(self, listbox_index):
-        """Plays the track corresponding to the given listbox index."""
+    def _validate_track_for_playback(self, listbox_index):
+        """
+        Validates if the track at listbox_index is playable before attempting to play.
+        Checks for valid index, existing file path in map, and actual file existence.
+        Prompts the user via a dialog if a file is missing, allowing removal from playlist.
+        Calls appropriate UI feedback methods (show_warning, stop_track, remove_track_from_playlist).
+
+        Args:
+            listbox_index (int): The index of the track in the `playlist_box`.
+
+        Returns:
+            str | None: The validated file path if the track is playable, otherwise None.
+        """
+        # Check if the playlist is empty or if the index is out of bounds
         if not self.playlist or not (0 <= listbox_index < len(self.playlist)):
-            # This might happen if list changes rapidly. Just stop.
-            print(f"Play request for invalid index: {listbox_index} (Playlist size: {len(self.playlist)})")
-            self.stop_track()
-            return
+            print(f"Validation failed: Invalid index {listbox_index} for playlist size {len(self.playlist)}.")
+            self.stop_track() # Stop playback if index is clearly out of bounds
+            return None
 
-        filepath = self.listbox_path_map.get(listbox_index)
+        filepath = self.listbox_path_map.get(listbox_index) # Get path from current view map
 
-        # Robust File Check (isfile implies exists)
+        # Check if the filepath was found and if the file actually exists on disk
+
         if not filepath or not os.path.isfile(filepath):
-            basename = os.path.basename(filepath) if filepath else f"Unknown (Index {listbox_index})"
-            print(f"Attempted to play missing/invalid file: {filepath}")
+            basename = os.path.basename(filepath) if filepath else f"Track (Index {listbox_index})"
+            print(f"Validation failed: File missing or path invalid: {filepath}")
             if messagebox.askyesno("File Missing",
                                    f"The file cannot be found:\n{basename}\n\n"
                                    f"Remove this track from the playlist?",
                                    icon='warning'):
-                 self.remove_track_from_playlist(filepath, listbox_index)
-                 self.stop_track() # Stop playback after removal attempt
+                self.remove_track_from_playlist(filepath, listbox_index)
+                # remove_track_from_playlist might stop playback if current track removed.
+                # Ensure it's stopped if this was the target.
+                self.stop_track() # Explicitly stop after removal dialog.
             else:
-                 self.show_warning("Playback Skipped", f"Skipped missing file:\n{basename}")
-                 self.stop_track()
-            return # Exit play_track
+                self.show_warning("Playback Skipped", f"Skipped missing file:\n{basename}")
+                self.stop_track() # Stop if user chooses not to remove.
+            return None # Signal that playback should not proceed
+
+        return filepath # All checks passed
+
+    def play_track(self, listbox_index):
+        """
+        Plays the track corresponding to the given listbox_index.
+        This method first validates the track using `_validate_track_for_playback`.
+        If valid, it updates playback history, sets the current track index,
+        loads metadata, updates the UI display, and starts audio playback via Pygame.
+        Handles Pygame errors during playback initiation.
+        """
+        filepath = self._validate_track_for_playback(listbox_index)
+        if not filepath:
+            return # Validation failed or user chose not to proceed (helper method handles UI feedback)
 
         # --- Proceed with playback ---
-        # Update history *before* changing current_track_index
+        # Update playback history: Add the previous track's listbox index to history
+        # if this is a new track selection (not a replay of the same track).
+        # This is crucial for the 'previous' button functionality, especially in shuffle mode.
         if self.current_track_index != -1 and self.current_track_index != listbox_index:
              prev_path = self.listbox_path_map.get(self.current_track_index)
              if prev_path != filepath: # Only add if it's truly a different track
@@ -1095,92 +1268,101 @@ class MediaPlayerApp:
 
 
     def next_track(self, from_event=False): # from_event differentiates user click from auto-advance
-        """Plays the next track based on shuffle/repeat modes."""
-        if not self.playlist: return
+        """
+        Plays the next track in the playlist, considering repeat and shuffle modes.
+
+        Args:
+            from_event (bool): True if called automatically by MUSIC_END_EVENT,
+                               False if called by user action (e.g., 'Next' button).
+                               This affects behavior for REPEAT_ONE.
+        """
+        if not self.playlist: return # No playlist, nothing to do
 
         current_list_size = len(self.playlist)
-        if current_list_size == 0: return
-
-        # If explicitly stopped by user, 'Next' should play the next item, not do nothing
-        # if self.playing_state == "stopped" and from_event==False: return # Original logic
+        if current_list_size == 0: return # Playlist is empty
 
         next_index = -1
 
-        if self.repeat_mode == REPEAT_ONE and not from_event: # Only repeat if auto-advancing
-            next_index = self.current_track_index # Request to play same track again
+        # REPEAT_ONE: If repeating one track and this is an auto-advance (not user skip)
+        if self.repeat_mode == self.REPEAT_ONE and from_event: # Note: was `and not from_event` which is usually for user clicks
+            next_index = self.current_track_index # Play the same track again
+        # Standard next track
         elif self.current_track_index < current_list_size - 1:
-             next_index = self.current_track_index + 1 # Standard next
-        elif self.repeat_mode == REPEAT_ALL:
-             next_index = 0 # Wrap around if repeating all
+             next_index = self.current_track_index + 1
+        # REPEAT_ALL: If at the end of the playlist and repeating all, wrap to the beginning
+        elif self.repeat_mode == self.REPEAT_ALL:
+             next_index = 0
         else:
-             # End of playlist, not repeating all
-             # Only show message/stop if auto-advancing (from_event==False)
-             if not from_event:
+             # End of playlist and not repeating all (or user clicked next at the end without repeat all)
+             # Only stop and show message if it's an auto-advance from an event.
+             if from_event: # Corrected from `not from_event`
                  self.stop_track()
                  self.show_info("Playback Finished", "End of playlist.")
-             # If user clicked Next at end, do nothing unless repeating
-             return
+             return # Do nothing further if user clicked 'Next' at the end without repeat.
 
         if next_index != -1:
              self.play_track(next_index)
 
 
     def prev_track(self):
-        """Plays the previous track or restarts the current one."""
+        """
+        Plays the previous track or restarts the current one.
+        - If the current track has played for more than 3 seconds, it restarts the current track.
+        - If shuffle is on and history exists, it plays the last track from history.
+        - Otherwise, it plays the standard previous track, wrapping around if REPEAT_ALL is on.
+        """
         if not self.playlist: return
 
         current_list_size = len(self.playlist)
         if current_list_size == 0: return
 
-        # Restart current track if played for > 3 seconds
+        # If current track played for more than 3 seconds, restart it
         try:
             if self.playing_state == "playing" and pygame.mixer.music.get_busy() and pygame.mixer.music.get_pos() > 3000:
-                 if self.current_track_index != -1:
+                 if self.current_track_index != -1: # Ensure there's a current track
                      print("Restarting current track.")
-                     self.play_track(self.current_track_index) # Re-trigger play_track
+                     self.play_track(self.current_track_index)
                      return
-        except pygame.error: pass # Ignore if get_pos fails (e.g., mixer stopped)
+        except pygame.error: pass # Ignore if get_pos fails (e.g., mixer stopped or not playing)
 
 
         prev_index = -1
 
-        # Handle shuffle history
+        # Shuffle mode: try to play from history
         if self.is_shuffled and self.playback_history:
              try:
-                 # Get last played index from history
                  prev_index = self.playback_history.pop()
-                 # Validate if this index is still valid *in the current view*
+                 # Validate if this historic index is still valid in the *current* (possibly changed) playlist view
                  if not (0 <= prev_index < current_list_size and self.listbox_path_map.get(prev_index)):
-                     print(f"History index {prev_index} invalid, reverting to standard previous.")
-                     prev_index = -1 # Fallback
+                     print(f"History index {prev_index} invalid for current playlist view, reverting to standard previous.")
+                     prev_index = -1 # Fallback to standard logic
              except IndexError:
-                 print("Playback history empty for shuffle-previous.")
+                 print("Playback history empty for shuffle-previous, using standard previous.")
                  prev_index = -1 # Fallback
 
-        # Standard previous logic (or fallback from shuffle)
-        if prev_index == -1:
+        # Standard previous logic (or fallback from shuffle history)
+        if prev_index == -1: # If not determined by shuffle history
              if self.current_track_index > 0:
-                 prev_index = self.current_track_index - 1 # Standard previous
-             elif self.repeat_mode == REPEAT_ALL:
-                 prev_index = current_list_size - 1 # Wrap around if repeating
-             else:
-                 # At start, not repeating. Options: stop, do nothing, restart first? Let's restart first.
+                 prev_index = self.current_track_index - 1
+             elif self.repeat_mode == self.REPEAT_ALL: # If at the start and repeating all, wrap to end
+                 prev_index = current_list_size - 1
+             else: # At the start, not repeating all. Restart the first track.
                  prev_index = 0 if current_list_size > 0 else -1
 
 
-        # Play the determined previous index if valid
         if prev_index != -1 and (0 <= prev_index < current_list_size):
              self.play_track(prev_index)
-        elif current_list_size > 0 and self.current_track_index != -1: # Only one track? Restart it.
-             print("Restarting single track on previous.")
+        # If only one track and prev_index logic didn't catch it (e.g. not REPEAT_ALL), restart it.
+        elif current_list_size > 0 and self.current_track_index == 0 and prev_index == 0 :
+             print("Restarting single/first track on previous.")
              self.play_track(self.current_track_index)
         else:
-             # Cannot determine previous track
-             print("Could not determine previous track.")
+             # Should ideally not be reached if logic above is comprehensive
+             print("Could not determine previous track or playlist empty.")
              self.stop_track()
 
 
-    def play_selected(self, event=None):
+    def play_selected(self, event=None): # event arg is for Tkinter binding
         """Plays the track double-clicked in the listbox."""
         try:
             selected_indices = self.playlist_box.curselection()
@@ -1237,15 +1419,21 @@ class MediaPlayerApp:
         # No need for rescheduling here, handled by check_music_end
 
     def check_music_end(self):
-        """Checks for pygame events, including MUSIC_END_EVENT, and updates time."""
+        """
+        Periodically checks for Pygame custom events, primarily MUSIC_END_EVENT.
+        This acts as a custom event loop for Pygame events integrated into Tkinter's main loop.
+        It also triggers periodic updates of the time display if music is playing.
+        This method reschedules itself using `root.after` to run continuously.
+        """
         try:
-            for event in pygame.event.get():
+            for event in pygame.event.get(): # Process all Pygame events
                 if event.type == self.MUSIC_END_EVENT:
                     print("Received MUSIC_END_EVENT.")
-                    # Advance to next track, respecting repeat modes
-                    self.next_track(from_event=True) # Indicate it's from the event, not user click
+                    # Music finished, advance to the next track respecting repeat modes.
+                    # 'from_event=True' indicates this is an automatic advance, not user action.
+                    self.next_track(from_event=True)
 
-            # Update time display periodically if playing
+            # If music is playing and the mixer is busy, update the time display.
             if self.playing_state == "playing" and pygame.mixer.music.get_busy():
                  self.update_time_display()
 
@@ -1253,8 +1441,8 @@ class MediaPlayerApp:
             print(f"Error in pygame event loop: {e}")
             traceback.print_exc()
         finally:
-            # Reschedule the check regardless of errors to keep the event loop running
-            self.root.after(250, self.check_music_end) # Check every 250ms
+            # Always reschedule this check to keep the event loop alive.
+            self.root.after(250, self.check_music_end) # Check approx. 4 times per second
 
     # update_track_display and update_album_art are called when needed (play_track, stop_track, preload_track_info)
     def update_track_display(self, title="---", artist="---", album="---", clear=False):
@@ -1302,7 +1490,7 @@ class MediaPlayerApp:
             try:
                 img_data = io.BytesIO(art_data)
                 pil_img = Image.open(img_data)
-                pil_img.thumbnail(ALBUM_ART_SIZE, Image.Resampling.LANCZOS)
+                pil_img.thumbnail(self.ALBUM_ART_SIZE, Image.Resampling.LANCZOS)
                 tk_img = ImageTk.PhotoImage(pil_img)
                 art_label.config(image=tk_img)
                 art_label.image = tk_img # Keep reference! Important.
@@ -1358,24 +1546,33 @@ class MediaPlayerApp:
 
 
     def sort_playlist_action(self, sort_key):
-        """Sorts the original_playlist_order and refreshes the view."""
+        """
+        Sorts the `self.original_playlist_order` based on the given `sort_key`.
+        For metadata-based sorts (title, artist, album), it fetches metadata for all tracks.
+        After sorting, it turns off shuffle mode and refreshes the playlist view.
+
+        Args:
+            sort_key (str): The key to sort by ('title', 'artist', 'album', or 'path').
+        """
         if not self.original_playlist_order:
             self.show_info("Empty Playlist", "Nothing to sort.")
             return
 
         print(f"Sorting playlist by: {sort_key}...")
-        # Show busy cursor? (More complex UI feedback)
+        # TODO: Consider adding a busy cursor feedback for long sorts.
 
         metadata_list = []
-        # --- Fetch metadata only if needed ---
+        # Fetch metadata only if sorting by a metadata field.
+        # This can be slow for large playlists.
         if sort_key in ('title', 'artist', 'album'):
             fetch_start_time = time.time()
             missing_files = 0
-            # Consider threading for large lists
+            # This loop can be time-consuming for large playlists as get_track_metadata reads each file.
+            # For very large libraries, a background thread or pre-cached metadata DB would be better.
             for i, path in enumerate(self.original_playlist_order):
-                 meta = self.get_track_metadata(path) # Handles missing files
+                 meta = self.get_track_metadata(path) # Fetches metadata, handles missing files internally
                  if meta['title'].startswith("[Missing]"): missing_files += 1
-                 metadata_list.append({
+                 metadata_list.append({ # Store path along with relevant metadata for sorting
                      'path': path,
                      'title': meta.get('title', '').lower(),
                      'artist': meta.get('artist', '').lower(),
@@ -1410,24 +1607,34 @@ class MediaPlayerApp:
 
 
     def _apply_filters_and_shuffle(self, force_refresh=False):
-        """Applies search filter and shuffle to the original list, updates view.
-           Includes optimization to avoid work if state hasn't changed."""
+        """
+        Applies the current search filter and shuffle state to `self.original_playlist_order`
+        to generate the `self.playlist` (the viewable list).
+        It then repopulates the listbox and attempts to maintain the selection of the
+        currently playing track.
 
-        # Optimization: Check if relevant state changed
+        Args:
+            force_refresh (bool): If True, bypasses the optimization check and always refreshes.
+                                  Useful after actions that modify original_playlist_order directly.
+        """
+
+        # Optimization: Avoids re-filtering/shuffling if search term and shuffle state haven't changed.
         search_changed = self.current_search_term != self._last_applied_search
         shuffle_changed = self.is_shuffled != self._last_applied_shuffle
 
         if not force_refresh and not search_changed and not shuffle_changed:
-             # print("Skipping refresh: search/shuffle state unchanged.")
-             return # No need to re-apply if nothing changed
+             # print("Skipping refresh: search/shuffle state unchanged or not forced.")
+             return # No change in relevant state, so no need to update the view.
 
         print(f"Applying filters/shuffle (Force={force_refresh}, Search='{self.current_search_term}', Shuffle={self.is_shuffled})...")
         start_time = time.time()
 
-        temp_playlist = list(self.original_playlist_order) # Start with full master list
+        # Always start with a fresh copy of the original, sorted/added-order playlist
+        temp_playlist = list(self.original_playlist_order)
 
-        # Apply search filter (currently simple filename check)
-        # TODO: Implement more robust metadata search (requires caching or slower filtering)
+        # Apply search filter: currently a simple case-insensitive check on the filename.
+        # For more advanced search (e.g., metadata), this would need to be more complex,
+        # potentially involving cached metadata.
         if self.current_search_term:
             try:
                 temp_playlist = [
@@ -1436,65 +1643,91 @@ class MediaPlayerApp:
                 ]
             except Exception as e:
                  print(f"Error during search filtering: {e}")
-                 # Continue without filtering if search fails? Or show error?
+                 # Decide on error handling: continue without filter, or show user error?
+                 # For now, it continues with the potentially unfiltered or partially filtered list.
 
         # Apply shuffle if enabled
         if self.is_shuffled:
-            random.shuffle(temp_playlist)
+            random.shuffle(temp_playlist) # Shuffles in-place
 
-        # Update the main playlist view
+        # Update the main `self.playlist` which represents the current view
         self.playlist = temp_playlist
 
-        # --- Find playing track's new index ---
+        # --- Preserve playing track's context ---
+        # Store the path of the currently playing/selected track *before* the listbox is repopulated.
+        # This is crucial to find its new position in the potentially reordered/filtered list.
         playing_path = None
-        current_lb_index = self.current_track_index
+        current_lb_index = self.current_track_index # This is the index in the *old* listbox_path_map
         if self.playing_state != "stopped" and current_lb_index != -1:
-            playing_path = self.listbox_path_map.get(current_lb_index) # Get path *before* map updates
+            playing_path = self.listbox_path_map.get(current_lb_index)
 
         # --- Repopulate UI ---
-        self._repopulate_listbox() # Update the Listbox UI (also updates listbox_path_map)
+        self._repopulate_listbox() # Clears and refills the listbox, also updates self.listbox_path_map
 
-        # --- Try to re-select the playing track ---
-        new_playing_index = -1
-        if playing_path:
-             # Find the path in the *new* listbox_path_map values
-             # Create inverse map for efficient lookup (path -> index)
-             try:
-                 # Need to handle potential duplicate paths if allowed, though currently prevented
-                 inverted_map = {path: idx for idx, path in self.listbox_path_map.items()}
-                 if playing_path in inverted_map:
-                     new_playing_index = inverted_map[playing_path]
-             except Exception as e: # Catch potential errors during map inversion/lookup
-                 print(f"Error finding playing track's new index: {e}")
+        # --- Try to re-select the playing track in the new view ---
+        self._find_and_select_playing_track_after_update(playing_path)
 
-
-        # --- Update current_track_index and selection ---
-        if new_playing_index != -1:
-             self.current_track_index = new_playing_index
-             self.select_listbox_item(self.current_track_index)
-             # No preload needed, info should be current
-        else:
-             # Playing track not found in new view OR wasn't playing
-             if self.playing_state != "stopped" and playing_path:
-                  print("Playing track disappeared from view after filter/shuffle/sort.")
-                  # Keep playing, but index is now invalid relative to listbox view
-                  self.current_track_index = -1
-             elif self.playlist: # If stopped/paused and playlist not empty, select first item
-                  self.current_track_index = 0
-                  self.select_listbox_item(0)
-                  self.preload_track_info(0) # Preload info for the new first item
-             else: # Playlist is empty
-                  self.current_track_index = -1
-                  self.update_track_display(clear=True)
-
-        # Update state tracking for optimization
+        # Update state tracking variables for future optimization checks
         self._last_applied_search = self.current_search_term
         self._last_applied_shuffle = self.is_shuffled
         end_time = time.time()
         print(f"Applied filters/shuffle in {end_time - start_time:.4f} seconds.")
 
+    def _find_and_select_playing_track_after_update(self, playing_path):
+        """
+        Finds the new index for a given playing_path after the playlist view
+        (and `self.listbox_path_map`) has been updated (e.g., after filtering or shuffling).
+        It attempts to find the `playing_path` in the new map, and if found, updates
+        `self.current_track_index` and selects the item in the listbox.
+        Handles cases where the track is no longer visible or if no track was playing.
 
-    def search_playlist_action(self, event=None):
+        Args:
+            playing_path (str | None): The file path of the track that was playing/selected
+                                       before the playlist view was updated. None if no track was selected.
+        """
+        new_playing_index = -1
+        if playing_path:
+            # Efficiently find the new index of playing_path by creating a reverse mapping
+            # from path to index from the updated self.listbox_path_map.
+            try:
+                # This assumes paths in listbox_path_map.values() are unique.
+                # If duplicates are allowed and meaningful, this might need adjustment.
+                inverted_map = {path: idx for idx, path in self.listbox_path_map.items()}
+                if playing_path in inverted_map:
+                    new_playing_index = inverted_map[playing_path]
+            except Exception as e: # Catch potential errors during map inversion/lookup
+                print(f"Error finding playing track's new index after update: {e}")
+
+        # --- Update current_track_index and listbox selection based on findings ---
+        if new_playing_index != -1:
+             # Track found in the new view, update index and select it.
+             self.current_track_index = new_playing_index
+             self.select_listbox_item(self.current_track_index)
+             # No need to call preload_track_info here, as the track's info should already be
+             # displayed if it was playing or just selected.
+        else:
+             # Case 1: A track was playing/selected (playing_path is not None) but is no longer in the view.
+             if self.playing_state != "stopped" and playing_path:
+                  print(f"Playing track '{os.path.basename(playing_path)}' disappeared from view after filter/shuffle/sort.")
+                  # Music might still be playing, but it's no longer selectable in the listbox.
+                  # Invalidate current_track_index for listbox purposes.
+                  self.current_track_index = -1
+                  # Optionally, clear visual selection in listbox: self.playlist_box.selection_clear(0, tk.END)
+             # Case 2: No track was playing OR playlist is not empty after update: select first item.
+             elif self.playlist: # If there are items in the new playlist view
+                  self.current_track_index = 0
+                  self.select_listbox_item(0)
+                  # If player was fully stopped, preload info for this new first item.
+                  # If paused, info for the (now gone) track might still be there,
+                  # preloading here would update display to the new first track.
+                  if self.playing_state == "stopped":
+                    self.preload_track_info(0)
+             # Case 3: Playlist is empty after update.
+             else:
+                  self.current_track_index = -1
+                  self.update_track_display(clear=True) # Clear all track info displays
+
+    def search_playlist_action(self, event=None): # event arg is for Tkinter binding
         """Initiated search based on the search entry."""
         self.current_search_term = self.search_var.get().lower().strip()
         self._apply_filters_and_shuffle() # Will refresh if term changed
